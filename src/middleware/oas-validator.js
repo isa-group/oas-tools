@@ -21,9 +21,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.*/
 
 var exports;  // eslint-disable-line
 var ZSchema = require("z-schema");
+var fetch = require('node-fetch');
+var fs = require('fs');
 
+var yaml = require('js-yaml');
 // unused: review
-// var yaml = require('js-yaml');
 // var fs = require('fs');
 // var path = require('path');
 // var http = require('http');
@@ -32,8 +34,9 @@ var ZSchema = require("z-schema");
 var config = require('../configurations'),
   logger = config.logger,
   utils = require('../lib/utils');
+
 var validator = new ZSchema({
-  ignoreUnresolvableReferences: true,
+  ignoreUnresolvableReferences: config.validatorRetrieveRemoteSchemaReferences? false : true,
   ignoreUnknownFormats: config.ignoreUnknownFormats,
   breakOnFirstError: false
 });
@@ -98,7 +101,7 @@ function addFilesToJSONPropertyValidation(files, dataToValidate) {
  * @param {string} method - Method requested by the client.
  * @param {string} req - The whole req object from the client request.
  */
-function checkRequestData(oasDoc, requestedSpecPath, method, res, req, next) { // eslint-disable-line
+async function checkRequestData(oasDoc, requestedSpecPath, method, res, req, next) { // eslint-disable-line
   var paths = oasDoc.paths;
   var keepGoing = true;
   //var msg = "";
@@ -125,7 +128,39 @@ function checkRequestData(oasDoc, requestedSpecPath, method, res, req, next) { /
       if (contentType.toLowerCase() === "multipart/form-data" && req.files && req.files.length > 0) {
         data = addFilesToJSONPropertyValidation(req.files, data);
       }
+
       var err = validator.validate(data, validSchema);
+      if (config.validatorRetrieveRemoteSchemaReferences) {
+        var missingReferences = validator.getMissingRemoteReferences();
+        if (missingReferences.length > 0) {
+          logger.info("OASValidator Found " + missingReferences.length + " missing/remote reference(s) in the OpenAPI Spec")
+          for (let url of missingReferences) {
+            try {
+              let body
+              if (url.startsWith("./") || url.startsWith("../") || url.startsWith("file://")) {
+                logger.info("OASValidator Getting local/relative reference '" + url +"'")
+                body = fs.readFileSync(url, {encoding:'utf8', flag:'r'})
+              } else {
+                logger.info("OASValidator Getting remote reference '" + url +"'")
+                const response = await fetch(url)
+                body = await response.text()
+              }
+
+              if (body[0] == "o") { // openapi yaml
+                await validator.setRemoteReference(url, yaml.safeLoad(body));
+              } else if (body[0] == "{") {
+                await validator.setRemoteReference(url, JSON.parse(body));
+              } else {
+                logger.info("OASValidator Error: Content from " + url + " did not start with YAML ('o[penapi]') nor JSON ('{...'). First character was '" + body[0] + "'")
+              }
+            } catch(e) {
+                logger.info("OASValidator Error: " + e)
+            }
+          }
+        }
+        err = validator.validate(data, validSchema); //Validate one more time after resolving references.
+      }
+
       if (err == false) {
         newErr = {
           message: "Wrong data in the body of the request. ",
@@ -170,7 +205,40 @@ function checkRequestData(oasDoc, requestedSpecPath, method, res, req, next) { /
           keepGoing = false;
         } else { // In case the parameter is indeed present, check type. In the case of array, check also type of its items!
           value = convertValue(req[location][name], schema); // eslint-disable-line
-          err = validator.validate(value, schema);
+
+          var err = validator.validate(value, schema);
+          if (config.validatorRetrieveRemoteSchemaReferences) {
+            var missingReferences = validator.getMissingRemoteReferences();
+            if (missingReferences.length > 0) {
+              logger.info("OASValidator Found " + missingReferences.length + " missing/remote reference(s) in the OpenAPI Spec")
+              for (let url of missingReferences) {
+                logger.info("OASValidator Getting remote reference '" + url +"'")
+                try {
+                  let body
+                  if (url.startsWith("./") || url.startsWith("../") || url.startsWith("file://")) {
+                    logger.info("OASValidator Getting local/relative reference '" + url +"'")
+                    body = fs.readFileSync(url, {encoding:'utf8', flag:'r'})
+                  } else {
+                    logger.info("OASValidator Getting remote reference '" + url +"'")
+                    const response = await fetch(url)
+                    body = await response.text()
+                  }
+
+                  if (body[0] == "o") { // openapi yaml
+                    await validator.setRemoteReference(url, yaml.safeLoad(body));
+                  } else if (body[0] == "{") {
+                    await validator.setRemoteReference(url, JSON.parse(body));
+                  } else {
+                    logger.info("OASValidator Error: Content from " + url + " did not start with YAML ('o[penapi]') nor JSON ('{...'). First character was '" + body[0] + "'")
+                  }
+                } catch(e) {
+                    logger.info("OASValidator Error: " + e)
+                }
+              }
+            }
+            err = validator.validate(value, schema); //Validate one more time after resolving references.
+          }
+
           if (err == false) {  // eslint-disable-line
             keepGoing = false;
             if (err.code == "UNKNOWN_FORMAT") { // eslint-disable-line

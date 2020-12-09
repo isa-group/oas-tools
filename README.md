@@ -54,6 +54,7 @@ __It is also possible to set configuration variables, these are them:__
 |`strict`	| `Boolean` | Indicates whether validation must stop the request process if errors were found when validating according to specification file. false by default. |
 |`router`	| `Boolean` | Indicates whether router middleware should be used. True by default. |
 |`validator` | `Boolean` | Indicates whether validator middleware should be used. True by default. |
+|`validatorRetrieveRemoteSchemaReferences` | `Boolean` | Indicates whether the validator middleware retrieves remote $refs. False by default. |
 |`docs` | `Object` | Settings used for Swagger UI, detailed in the following four rows. If you do not want to use the default values, you must specify values for all four settings, even if you only want to change one of them. |
 |`docs.apiDocs` | `String` | Indicates the path where the OAS specification will be available. `/api-docs` by default. |
 |`docs.apiDocsPrefix` | `String` | Indicates a prefix to be prepended to `docs.apiDocs`. Empty by default. |
@@ -150,7 +151,7 @@ var swaggerTools = require('oas-tools');
 As you may know oas-tools works only with the version 3 of the specification, therefore you should update you specification file.
 Use [this tool](https://mermade.org.uk/openapi-converter) to do so. Once you get the translation simply copy-past it to you former specification file.
 
-[Note: Minor adjustment on the translated specification may be required. Validate it using [swagger validator](https://editor.swagger.io//?_ga=2.51587887.728712022.1527179832-1439038723.1495297764#/) 
+[Note: Minor adjustment on the translated specification may be required. Validate it using [swagger validator](https://editor.swagger.io//?_ga=2.51587887.728712022.1527179832-1439038723.1495297764#/)
 
  __4.	Provide express server object to initialize method:__
 
@@ -189,7 +190,7 @@ post:
 __6.	(optional) use `multer` for binary uploads:__
 
 The default middleware for handling file uploads in `express` via `multipart/form-data` is [`multer`](https://github.com/expressjs/multer). Use it in addition to the json body parser when initializing the server:
-```js 
+```js
 const bodyParser = require('body-parser');
 const multer = require('multer');
 const upload = multer();
@@ -199,7 +200,7 @@ app.use(bodyParser.json({
   strict: false
 }));
 app.use(upload.any());
-``` 
+```
 
 Also make sure that the application consuming the openAPI server sends the file input form name according to the openAPI spec:
 ```yaml
@@ -265,7 +266,7 @@ var jwt = require('jsonwebtoken');
 
 function verifyToken(req, secDef, token, next) {
   const bearerRegex = /^Bearer\s/;
-  
+
   if (token && bearerRegex.test(token)) {
     var newToken = token.replace(bearerRegex, '');
     jwt.verify(newToken, 'secretKey',
@@ -525,14 +526,14 @@ Since oas-tools reports validation errors with a common structure, we provide a 
 }
 ```
 
-By default, the errors are returned by a direct HTTP 400 response. If you need custom error handling, you may set the `customErrorHandling` config property to `true`, 
+By default, the errors are returned by a direct HTTP 400 response. If you need custom error handling, you may set the `customErrorHandling` config property to `true`,
 which causes validation errors to be passed to `next()`. The following properties are set:
 
 | Name	| Type	| Explanation / Values |
 | ------------- | ------------- | ------------- |
 |`failedValidation` | `Boolean` | Property can be used to check if the error comes from the oas validation. |
 |`validationResult` | `Object` | Validation results conforming to the beforementioned schema. |
- 
+
 ## Contributing
 
 We are open to issues and pull requests. If you want to contribute to this project, please check our [recommended guidelines](CONTRIBUTING.md).

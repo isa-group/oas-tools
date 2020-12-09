@@ -9,6 +9,7 @@ production:
   strict: false
   router: true
   validator: true
+  validatorRetrieveRemoteSchemaReferences: false
   docs:
     apiDocs: '/api-docs'
     apiDocsPrefix: ''
@@ -29,6 +30,7 @@ development:
   strict: true
   router: true
   validator: true
+  validatorRetrieveRemoteSchemaReferences: false
   docs:
     apiDocs: '/api-docs'
     apiDocsPrefix: ''

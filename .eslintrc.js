@@ -4,6 +4,9 @@ module.exports = {
         "node": true,
         "mocha": true
     },
+    "parserOptions": {
+        "ecmaVersion":8
+    },
     "extends": "eslint:recommended",
     "rules": {
         "accessor-pairs": "error",
