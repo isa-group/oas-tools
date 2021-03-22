@@ -1,3 +1,0 @@
-FROM node:6.9
-
-EXPOSE 80 8080

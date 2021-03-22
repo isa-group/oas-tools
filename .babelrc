@@ -1,0 +1,44 @@
+{
+  "env": {
+    "commonjs": {
+      "presets": [
+        [
+          "@babel/env",
+          {
+            "targets": {
+              "node": "10.23"
+            },
+            "modules": "commonjs"
+          }
+        ]
+      ]
+    },
+    "module": {
+      "presets": [
+        [
+          "@babel/env",
+          {
+            "targets": {
+              "node": "14.15"
+            },
+            "modules": false
+          }
+        ]
+      ]
+    },
+    "test": {
+      "presets": [
+        [
+          "@babel/env",
+          {
+            "targets": {
+              "node": "current"
+            }
+          }
+        ]
+      ],
+      "sourceMaps": "inline"
+    }
+  },
+  "sourceMaps": true
+}

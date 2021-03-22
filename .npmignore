@@ -1,3 +1,0 @@
-# Ignore npm packaging
-.git/
-node_modules/**/*.git

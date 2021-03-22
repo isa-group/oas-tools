@@ -17,49 +17,37 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.*/
 
-'use strict';
-
-var exports;  // eslint-disable-line
-var ZSchema = require("z-schema");
-
-// unused: review
-// var yaml = require('js-yaml');
-// var fs = require('fs');
-// var path = require('path');
-// var http = require('http');
-// var urlModule = require('url');
-
-var config = require('../configurations'),
-  logger = config.logger,
-  utils = require('../lib/utils');
-var validator = new ZSchema({
+import * as _ from "lodash-compat";
+import * as utils from "../lib/utils";
+import ZSchema from "z-schema";
+import { config } from "../configurations";
+const validator = new ZSchema({
   ignoreUnresolvableReferences: true,
   ignoreUnknownFormats: config.ignoreUnknownFormats,
-  breakOnFirstError: false
+  breakOnFirstError: false,
 });
-var _ = require('lodash-compat');
-
 
 /**
  * Returns the Express version of the OAS name for location.
  * @param {string} inProperty - Location of a parameter, value of 'in' property of the oasDoc file for that parameter.
  */
-function locationFormat(inProperty) { //TODO: Possible 'in' values: path, query, header, cookie.
+function locationFormat(inProperty) {
+  //TODO: Possible 'in' values: path, query, header, cookie.
   var dict = {
     path: "params",
     query: "query",
     header: "headers",
-    cookie: "cookie"
+    cookie: "cookie",
   };
   return dict[inProperty];
   //return (inProperty == "path" ? "params" : inProperty); //TODO: if only 'path' changes then this is the solution!
 }
 
- /**
-  * Filters path parameters so that method parameters can override them
-  * @param {*} methodParameters - Method-specific parameters
-  * @param {*} pathParameters - Common parameters for every path method
-  */
+/**
+ * Filters path parameters so that method parameters can override them
+ * @param {*} methodParameters - Method-specific parameters
+ * @param {*} pathParameters - Common parameters for every path method
+ */
 function filterParams(methodParameters, pathParameters) {
   var res = methodParameters;
   var paramNames = methodParameters.map((param) => {
@@ -87,8 +75,115 @@ function addFilesToJSONPropertyValidation(files, dataToValidate) {
     if (file.fieldname && file.originalname) {
       data[file.fieldname] = file.originalname;
     }
-  })
+  });
   return data;
+}
+
+function checkBody(req, requestBody) {
+  const emptyBody = req.body == undefined || JSON.stringify(req.body) == "{}";
+  if (requestBody.required && emptyBody) {
+    return {
+      message: "Missing object in the request body. ",
+    };
+  } else if (requestBody.required || !emptyBody) {
+    // can be any of "application/json", "multipart/form-data", "image/png", ...
+    const contentType = Object.keys(requestBody.content)[0];
+    var validSchema = _.cloneDeep(requestBody.content[contentType].schema);
+    utils.fixNullable(validSchema);
+
+    var data = req.body; //JSON.parse(req.body); //Without this everything is string so type validation wouldn't happen TODO: why is it commented?
+    // a multipart/form-data request has a "files" property in the request whose
+    // properties need to be passed to evaluating the required parameters in the openAPI spec
+    if (
+      contentType.toLowerCase() === "multipart/form-data" &&
+      req.files &&
+      req.files.length > 0
+    ) {
+      data = addFilesToJSONPropertyValidation(req.files, data);
+    }
+    var err = validator.validate(data, validSchema);
+    if (err == false) {
+      return {
+        message: "Wrong data in the body of the request. ",
+        error: validator.getLastErrors(),
+        content: data,
+      };
+    }
+    config.logger.info("Valid parameter on request");
+  }
+  return undefined;
+}
+
+function getRequestProperty(req, location, name) {
+  const requestLocation = req[location];
+  if (location === "headers") {
+    return requestLocation[
+      Object.keys(requestLocation).find(
+        (key) => key.toLowerCase() === name.toLowerCase()
+      )
+    ];
+  }
+  return requestLocation[name];
+}
+
+function checkParameter(req, params) {
+  const errorMessages = [];
+  for (var i = 0; i < params.length; i++) {
+    //TODO: 'required' property is not required, some parameters may not have it (those in query for example)
+
+    const { name, schema } = params[i];
+    const location = locationFormat(params[i].in);
+    const currentParameter = params[i];
+
+    const nullable =
+      currentParameter.nullable === undefined
+        ? false
+        : Boolean(currentParameter.nullable);
+    const required =
+      currentParameter.required === undefined
+        ? false
+        : Boolean(currentParameter.required);
+
+    const requestParameter = getRequestProperty(req, location, name);
+
+    if (requestParameter === undefined) {
+      if (required) {
+        errorMessages.push({
+          message: "Missing parameter " + name + " in " + location + ". ",
+        });
+      }
+    } else if (requestParameter === null) {
+      if (nullable === false) {
+        errorMessages.push({
+          message:
+            "The parameter " + name + " in " + location + " cannot be null. ",
+        });
+      }
+    } else {
+      // In case the parameter is indeed present, check type. In the case of array, check also type of its items!
+      const value = convertValue(
+        requestParameter,
+        schema,
+        getParameterType(currentParameter),
+        currentParameter
+      );
+      const err = validator.validate(value, schema);
+      if (err == false) {
+        if (err.code == "UNKNOWN_FORMAT") {
+          var registeredFormats = ZSchema.getRegisteredFormats();
+          config.logger.error("UNKNOWN_FORMAT error - Registered Formats: ");
+          config.logger.error(registeredFormats);
+        }
+        errorMessages.push({
+          message: "Wrong parameter " + name + " in " + location + ". ",
+          error: validator.getLastErrors(),
+        });
+      } else {
+        config.logger.info("Valid parameter on request");
+      }
+    }
+  }
+  return errorMessages;
 }
 
 /**
@@ -98,113 +193,52 @@ function addFilesToJSONPropertyValidation(files, dataToValidate) {
  * @param {string} method - Method requested by the client.
  * @param {string} req - The whole req object from the client request.
  */
-function checkRequestData(oasDoc, requestedSpecPath, method, res, req, next) { // eslint-disable-line
+function checkRequestData(oasDoc, requestedSpecPath, method, res, req, next) {
   var paths = oasDoc.paths;
   var keepGoing = true;
   //var msg = "";
   var msg = [];
 
-  if (paths[requestedSpecPath][method].hasOwnProperty('requestBody')) {
-    var requestBody = paths[requestedSpecPath][method].requestBody;
-    const emptyBody = req.body == undefined || JSON.stringify(req.body) == '{}';
-    if (requestBody.required && emptyBody) {
-      var newErr = {
-        message: "Missing object in the request body. "
-      };
-      msg.push(newErr);
+  if (paths[requestedSpecPath][method].hasOwnProperty("requestBody")) {
+    const message = checkBody(
+      req,
+      paths[requestedSpecPath][method].requestBody
+    );
+    if (message !== undefined) {
+      msg.push(message);
       keepGoing = false;
-    } else if (requestBody.required || !emptyBody) {
-      // can be any of "application/json", "multipart/form-data", "image/png", ...
-      const contentType = Object.keys(requestBody.content)[0];
-      var validSchema = _.cloneDeep(requestBody.content[contentType].schema)
-      utils.fixNullable(validSchema)
-
-      var data = req.body; //JSON.parse(req.body); //Without this everything is string so type validation wouldn't happen TODO: why is it commented?
-      // a multipart/form-data request has a "files" property in the request whose
-      // properties need to be passed to evaluating the required parameters in the openAPI spec
-      if (contentType.toLowerCase() === "multipart/form-data" && req.files && req.files.length > 0) {
-        data = addFilesToJSONPropertyValidation(req.files, data);
-      }
-      var err = validator.validate(data, validSchema);
-      if (err == false) {
-        newErr = {
-          message: "Wrong data in the body of the request. ",
-          error: validator.getLastErrors(),
-          content: data
-        };
-        msg.push(newErr);
-        keepGoing = false;
-      } else {
-        logger.info("Valid parameter on request");
-      }
     }
   }
 
-  if (paths[requestedSpecPath][method].hasOwnProperty('parameters') || paths[requestedSpecPath].hasOwnProperty('parameters')) {
-
-    var methodParams = paths[requestedSpecPath][method].parameters || [];
-    var pathParams = paths[requestedSpecPath].parameters || [];
-    var params = filterParams(methodParams, pathParams);
-
-
-    for (var i = 0; i < params.length; i++) {
-
-      //TODO: 'required' property is not required, some parameters may not have it (those in query for example)
-
-      if (params[i].required != undefined && params[i].required.toString() == 'true') { //TODO: in case it is not required...there is no validation?
-        var name = params[i].name;
-        var location = params[i].in;
-        var schema = params[i].schema;
-        var value;
-
-        location = locationFormat(location);
-        if (location === "headers") {
-            name = name.toLowerCase(); // Allows OpenAPI Spec header params to be handled as case-insensitive.
-        }
-
-        if (req[location][name] == undefined) { //if the request is missing a required parameter acording to the oasDoc: warning
-          newErr = {
-            message: "Missing parameter " + name + " in " + location + ". "
-          };
-          msg.push(newErr);
-          keepGoing = false;
-        } else { // In case the parameter is indeed present, check type. In the case of array, check also type of its items!
-          value = convertValue(req[location][name], schema); // eslint-disable-line
-          err = validator.validate(value, schema);
-          if (err == false) {  // eslint-disable-line
-            keepGoing = false;
-            if (err.code == "UNKNOWN_FORMAT") { // eslint-disable-line
-              var registeredFormats = ZSchema.getRegisteredFormats();
-              logger.error("UNKNOWN_FORMAT error - Registered Formats: ");
-              logger.error(registeredFormats);
-            }
-            newErr = {
-              message: "Wrong parameter " + name + " in " + location + ". ",
-              error: validator.getLastErrors()
-            };
-            msg.push(newErr);
-          } else {
-            logger.info("Valid parameter on request");
-          }
-        }
-      }
+  if (
+    paths[requestedSpecPath][method].hasOwnProperty("parameters") ||
+    paths[requestedSpecPath].hasOwnProperty("parameters")
+  ) {
+    const methodParams = paths[requestedSpecPath][method].parameters || [];
+    const pathParams = paths[requestedSpecPath].parameters || [];
+    const params = filterParams(methodParams, pathParams);
+    const errorMessages = checkParameter(req, params);
+    if (errorMessages.length !== 0) {
+      msg = msg.concat(errorMessages);
+      keepGoing = false;
     }
   }
+
   if (keepGoing == false && config.strict == true) {
     if (config.customErrorHandling) {
-      var error = new Error('Request validation error')
+      var error = new Error("Request validation error");
       Object.assign(error, {
         failedValidation: true,
-        validationResult: msg
-      })
-      next(error)
+        validationResult: msg,
+      });
+      next(error);
     } else {
-      logger.error(JSON.stringify(msg));
+      config.logger.error(JSON.stringify(msg));
       res.status(400).send(msg);
     }
   } else {
     if (msg.length != 0) {
-      logger.warn(JSON.stringify(msg));
+      config.logger.warn(JSON.stringify(msg));
     }
     res.locals.oasDoc = oasDoc;
     next();
@@ -221,7 +255,7 @@ function getParameterType(schema) {
     type = getParameterType(schema.schema);
   }
   if (!type) {
-    type = 'object';
+    type = "object";
   }
   return type;
 }
@@ -242,21 +276,21 @@ function getParameterValue(req, parameter) {
 
   // Get the value to validate based on the operation parameter type
   switch (paramLocation) {
-    case 'body':
+    case "body":
       val = req.body;
 
       break;
-    case 'form':
-    case 'formData':
-    case 'header':
+    case "form":
+    case "formData":
+    case "header":
       val = req.headers[parameter.name.toLowerCase()];
 
       break;
-    case 'path':
+    case "path":
       val = req.params[parameter.name]; // TODO: how many parameters can be in the path?
 
       break;
-    case 'query':
+    case "query":
       val = _.get(req.query, parameter.name);
 
       break;
@@ -269,172 +303,172 @@ function getParameterValue(req, parameter) {
   return val;
 }
 
+function convertArrayValue(value, schema) {
+  let arrayValue;
+  if (typeof value === "string") {
+    try {
+      arrayValue = JSON.parse(value);
+      // Handle situation where the expected type is array but only one value was provided
+      if (Array.isArray(arrayValue) === false) {
+        return [value];
+      }
+    } catch (err) {
+      return value;
+    }
+  }
+
+  return arrayValue.map(value, (item, index) => {
+    const itemSchema = Array.isArray(schema.items)
+      ? schema.items[index]
+      : schema.items;
+
+    return convertValue(
+      item,
+      itemSchema,
+      itemSchema ? itemSchema.type : undefined
+    );
+  });
+}
+
+function convertBooleanValue(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return value;
+}
+
+function convertNumberValue(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const numberValue = Number(value);
+  if (isNaN(numberValue)) {
+    return value;
+  }
+  return numberValue;
+}
+
+function convertObjectValue(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch (err) {
+    return value;
+  }
+}
+
+function convertStringValue(value, schema) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  if (["date", "date-time"].includes(schema.format)) {
+    const date = new Date(value);
+    if (date.toString() === "Invalid Date") {
+      return value;
+    }
+    return date;
+  }
+  return value;
+}
+
 /**
  * .
  * @param {string}  - .
  */
-function convertValue(value, schema, type) { // eslint-disable-line
-  var original = value;
-
-  // Default to {}
-  if (_.isUndefined(schema)) {
-    schema = {}; // eslint-disable-line
-  }
-
-  // Try to find the type or default to 'object'
-  if (_.isUndefined(type)) {
-    type = getParameterType(schema); // eslint-disable-line
-  }
-
+function convertValue(value, optionalSchema, optionalType) {
   // If there is no value, do not convert it
-  if (_.isUndefined(value)) {
+  if (value === undefined) {
     return value;
   }
+  const schema = optionalSchema === undefined ? {} : optionalSchema;
 
   // If there is an empty value and allowEmptyValue is true, return it
-  if (schema.allowEmptyValue && value === '') {
+  if (schema.allowEmptyValue && value === "") {
     return value;
   }
+  const type =
+    optionalType === undefined ? getParameterType(schema) : optionalType;
 
   switch (type) {
-    case 'array':
-      if (_.isString(value)) {
-          try {
-            value = JSON.parse(value); // eslint-disable-line
-          if (!_.isArray(value)) {
-            value = original; // eslint-disable-line
-          }
-          } catch (err) {
-            value = original; // eslint-disable-line
-          }
-      }
+    case "array":
+      return convertArrayValue(value, schema);
 
-      // Handle situation where the expected type is array but only one value was provided
-      if (!_.isArray(value)) {
-        value = [value]; // eslint-disable-line
-      }
+    case "boolean":
+      return convertBooleanValue(value);
 
-      value = _.map(value, function(item, index) { // eslint-disable-line
-        var iSchema = _.isArray(schema.items) ? schema.items[index] : schema.items;
+    case "integer":
+    case "number":
+      return convertNumberValue(value);
 
-        return convertValue(item, iSchema, iSchema ? iSchema.type : undefined);
-      });
+    case "object":
+      return convertObjectValue(value);
 
-      break;
-
-    case 'boolean':
-      if (!_.isBoolean(value)) {
-        if (['false', 'true'].indexOf(value) === -1) {
-          value = original; // eslint-disable-line
-        } else {
-          value = value === 'true'; // eslint-disable-line
-        }
-      }
-
-      break;
-
-    case 'integer':
-      if (!_.isNumber(value)) {
-        if (_.isString(value) && _.trim(value).length === 0) {
-          value = NaN; // eslint-disable-line
-        }
-
-        value = Number(value); // eslint-disable-line
-
-        if (isNaN(value)) {
-          value = original; // eslint-disable-line
-        }
-      }
-
-      break;
-
-    case 'number':
-      if (!_.isNumber(value)) {
-        if (_.isString(value) && _.trim(value).length === 0) {
-          value = NaN; // eslint-disable-line
-        }
-
-        value = Number(value); // eslint-disable-line
-
-        if (isNaN(value)) {
-          value = original; // eslint-disable-line
-        }
-      }
-
-      break;
-
-    case 'object':
-      if (_.isString(value)) {
-        try {
-          value = JSON.parse(value); // eslint-disable-line
-        } catch (err) {
-          value = original; // eslint-disable-line
-        }
-      }
-
-      break;
-
-    case 'string':
-      if (['date', 'date-time'].indexOf(schema.format) > -1 && !_.isDate(value)) {
-        value = new Date(value); // eslint-disable-line
-
-        if (!_.isDate(value) || value.toString() === 'Invalid Date') {
-          value = original; // eslint-disable-line
-        }
-      }
-
-      break;
-
+    case "string":
+    default:
+      return convertStringValue(value, schema);
   }
-
-  return value;
 }
 
 /**
  * Subtracts the basePath of the requested path.
  * @param {string} reqRoutePath - Value of req.route.path.
  */
-function removeBasePath(reqRoutePath){
-    return reqRoutePath.split('').filter((a, i) => {
-        return a !== config.basePath[i];
+function removeBasePath(reqRoutePath) {
+  return reqRoutePath
+    .split("")
+    .filter((a, i) => {
+      return a !== config.basePath[i];
     })
-    .join('');
+    .join("");
 }
 
-
-module.exports = (oasDoc) => {
-
+export default (oasDoc) => {
   return function OASValidator(req, res, next) {
-
     var method = req.method.toLowerCase();
 
-    logger.info("Requested method-url pair: " + method + " - " + req.url);
+    config.logger.info(
+      "Requested method-url pair: " + method + " - " + req.url
+    );
 
     var requestedSpecPath = config.pathsDict[removeBasePath(req.route.path)];
-    var operation = oasDoc.paths[requestedSpecPath][method]
+    var operation = oasDoc.paths[requestedSpecPath][method];
 
     req.swagger = {
       params: {},
-      operation: operation
-    }
+      operation: operation,
+    };
 
     var methodParameters = operation.parameters || [];
     var pathParameters = oasDoc.paths[requestedSpecPath].parameters || [];
     var parameters = filterParams(methodParameters, pathParameters);
     if (parameters != undefined) {
-      parameters.forEach((parameter) => { // TODO: para POST y PUT el objeto se define en 'requestBody' y no en 'parameters'
+      parameters.forEach((parameter) => {
+        // TODO: para POST y PUT el objeto se define en 'requestBody' y no en 'parameters'
         var pType = getParameterType(parameter);
         var oVal = getParameterValue(req, parameter);
-        var value = convertValue(oVal, parameter.schema == undefined ? parameter : parameter.schema, pType);
+        var value = convertValue(
+          oVal,
+          parameter.schema == undefined ? parameter : parameter.schema,
+          pType
+        );
 
         req.swagger.params[parameter.name] = {
-                                        // pgillis 2019 June 11
+          // pgillis 2019 June 11
 
           //path: "/some/path", //this shows the path to follow on the spec file to get to the parameter but oas-tools doesn't use it!
           path: requestedSpecPath,
           schema: parameter,
           originalValue: oVal,
-          value: value
+          value: value,
         };
       });
     }
@@ -446,29 +480,31 @@ module.exports = (oasDoc) => {
       // other requestBody types such as "image/png" are allowed as well
       // https://github.com/OAI/OpenAPI-Specification/blob/master/versions/3.0.2.md#considerations-for-file-uploads
       const contentType = Object.keys(requestBody.content)[0];
-      req.swagger.params[requestBody['x-name']] = {
-
-                                        // pgillis 2019 June 11
+      req.swagger.params[requestBody["x-name"]] = {
+        // pgillis 2019 June 11
 
         //path: "/some/path", //this shows the path to follow on the spec file to get to the parameter but oas-tools doesn't use it!
         path: requestedSpecPath,
         schema: requestBody.content[contentType].schema,
         originalValue: req.body,
-        value: req.body
-      }
+        value: req.body,
+      };
 
       // inject possible file uploads
-      if(contentType.toLowerCase() === 'multipart/form-data' && req.files && req.files.length > 0) {
-        req.swagger.params[requestBody['x-name']].files = req.files;
+      if (
+        contentType.toLowerCase() === "multipart/form-data" &&
+        req.files &&
+        req.files.length > 0
+      ) {
+        req.swagger.params[requestBody["x-name"]].files = req.files;
       }
     }
 
     res.locals.requestedSpecPath = requestedSpecPath;
-    logger.debug("OASValidator  -res.locals.requestedSpecPath: " + res.locals.requestedSpecPath);
+    config.logger.debug(
+      "OASValidator  -res.locals.requestedSpecPath: " +
+        res.locals.requestedSpecPath
+    );
     checkRequestData(oasDoc, requestedSpecPath, method, res, req, next);
-  }
-}
-
-exports = module.exports;
-
-
+  };
+};
