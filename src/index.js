@@ -22,7 +22,7 @@ var validator = new ZSchema({
 });
 var utils = require("./lib/utils.js");
 var express = require('express');
-var request = require('request');
+var utilRequest = require('./lib/utilRequest.js')
 
 // var controllers;
 // var customConfigurations = false;
@@ -249,8 +249,8 @@ function initializeSecurityAndAuth(specDoc) {
     Object.keys(config.securityFile).forEach((secName) => {
       if (typeof config.securityFile[secName] === 'string' && isJWTScheme(specDoc.components.securitySchemes[secName])) {
         if (config.securityFile[secName].substr(0, 4) === 'http') {
-          request(config.securityFile[secName], (err, res, body) => {
-            config.securityFile[secName] = JSON.parse(body);
+          utilRequest.urlGetJson(config.securityFile[secName], (jsonResponse) => {
+            config.securityFile[secName] = jsonResponse
           });
         } else if (config.securityFile[secName].charAt(0) === '/') {
           config.securityFile[secName] = require(config.securityFile[secName]);
@@ -262,8 +262,8 @@ function initializeSecurityAndAuth(specDoc) {
     Object.keys(config.grantsFile).forEach((secName) => {
       if (typeof config.grantsFile[secName] === 'string' && isJWTScheme(specDoc.components.securitySchemes[secName])) {
         if (config.grantsFile[secName].substr(0, 4) === 'http') {
-          request(config.grantsFile[secName], (err, res, body) => {
-            config.grantsFile[secName] = extendGrants(specDoc, JSON.parse(body));
+          utilRequest.urlGetJson(config.grantsFile[secName], (jsonResponse) => {
+            config.grantsFile[secName] = extendGrants(specDoc, jsonResponse)
           });
         } else if (config.grantsFile[secName].charAt(0) === '/') {
           config.grantsFile[secName] = extendGrants(specDoc, require(config.grantsFile[secName]));
