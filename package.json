@@ -35,7 +35,7 @@
     "validator": "^13.0.0",
     "whatwg-mimetype": "^2.3.0",
     "winston": "^3.2.1",
-    "z-schema": "^4.2.0"
+    "z-schema": "^5.0.1"
   },
   "devDependencies": {
     "chai": "^4.2.0",
