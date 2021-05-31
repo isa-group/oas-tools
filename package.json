@@ -13,11 +13,11 @@
     "publish-please": "publish-please",
     "prepublishOnly": "publish-please guard"
   },
-  "author": "ISA Group, University of Seville",
+  "author": "Decent Gradient",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/isa-group/oas-tools.git"
+    "url": "git+https://github.com/decentgradient/oas-tools.git"
   },
   "dependencies": {
     "accesscontrol": "^2.2.1",

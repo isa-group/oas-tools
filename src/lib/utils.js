@@ -38,7 +38,7 @@ var fixNullable = function(schema) {
  * @param {string} nameFor - possible values are controller, function, variable.
  */
 var generateName = function(input, nameFor) {
-  var chars = 'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789.';
+  var chars = 'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789./-_';
   var name = validator.whitelist(input, chars)
   switch (nameFor) {
     case "controller":
